@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Camera Test</title>
+  <style>
+    body { background: #0f172a; color: white; font-family: monospace; padding: 20px; }
+    video { width: 400px; height: 300px; border: 2px solid #6366f1; border-radius: 8px; display: block; margin: 20px 0; }
+    #status { font-size: 14px; padding: 10px; background: #1e293b; border-radius: 6px; margin: 10px 0; }
+    .ok { color: #10b981; } .err { color: #ef4444; }
+  </style>
+</head>
+<body>
+  <h2>📷 Camera Test — SmartLabX Proctor Debug</h2>
+  <div id="status">Testing camera access...</div>
+  <video id="vid" autoplay muted playsinline></video>
+  <div id="log"></div>
+
+  <script>
+    const status = document.getElementById('status');
+    const log = document.getElementById('log');
+    const vid = document.getElementById('vid');
+
+    function addLog(msg, isErr) {
+      const d = document.createElement('div');
+      d.style.color = isErr ? '#ef4444' : '#10b981';
+      d.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+      log.prepend(d);
+    }
+
+    addLog('Requesting camera permission...');
+
+    navigator.mediaDevices.getUserMedia({
+      video: { width: { ideal: 640 }, height: { ideal: 480 } },
+      audio: false
+    })
+    .then(stream => {
+      vid.srcObject = stream;
+      vid.play()
+        .then(() => {
+          status.innerHTML = '<span class="ok">✅ Camera working! You should see your face above.</span>';
+          addLog('Camera started successfully. Track: ' + stream.getVideoTracks()[0].label);
+          
+          // Test canvas frame capture (same as useProctoring)
+          setTimeout(() => {
+            const canvas = document.createElement('canvas');
+            canvas.width = 640; canvas.height = 480;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(vid, 0, 0, 640, 480);
+            const b64 = canvas.toDataURL('image/jpeg', 0.8);
+            addLog('Frame capture OK. Base64 length: ' + b64.length + ' chars');
+
+            // Test API call to FastAPI
+            fetch('http://localhost:8000/api/proctor/frame', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ student_id: 'TEST', image_base64: b64 })
+            })
+            .then(r => r.json())
+            .then(data => {
+              addLog('API Response: face_detected=' + data.telemetry?.face_detected + 
+                     ', face_count=' + data.telemetry?.face_count +
+                     ', risk=' + data.telemetry?.risk_level);
+            })
+            .catch(e => addLog('API call failed: ' + e.message, true));
+          }, 1000);
+        })
+        .catch(e => { status.innerHTML = '<span class="err">❌ video.play() failed: ' + e.message + '</span>'; addLog('play() error: ' + e, true); });
+    })
+    .catch(err => {
+      status.innerHTML = '<span class="err">❌ Camera DENIED: ' + err.name + ' — ' + err.message + '</span>';
+      addLog('getUserMedia error: ' + err.name + ' | ' + err.message, true);
+      if (err.name === 'NotFoundError') addLog('➜ No camera device found on this system!', true);
+      if (err.name === 'NotAllowedError') addLog('➜ Permission denied. Allow in browser settings.', true);
+      if (err.name === 'NotReadableError') addLog('➜ Camera is IN USE by another app!', true);
+    });
+  </script>
+</body>
+</html>
