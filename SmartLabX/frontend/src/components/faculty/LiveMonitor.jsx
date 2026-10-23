@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { subscribeToLiveUpdates, sendStaffWarning, lockStudentWorkspace, broadcastAnnouncement, getLabSchedule, saveLabSchedule, getTodaysLab, getAllCognitiveFrictionRecords, calculateCognitiveFrictionScore } from '../../utils/liveTracker';
+import { raiseApi } from '../../utils/api';
 
 const ALL_DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 const SUBJECT_OPTIONS = [
@@ -25,6 +26,7 @@ export default function LiveMonitor() {
   const [editingSchedule, setEditingSchedule] = useState(false);
   const [draftSchedule, setDraftSchedule] = useState(() => getLabSchedule());
   const [todaysLab, setTodaysLab] = useState(() => getTodaysLab());
+  const [raiseDiag, setRaiseDiag] = useState(null);
 
   const fetchRealData = () => {
     try {
@@ -211,6 +213,18 @@ export default function LiveMonitor() {
 
   const activeStudents = liveData.studentsList;
   const selectedStudent = activeStudents.find((student) => student.id === selectedStudentId);
+
+  useEffect(() => {
+    if (!selectedStudent?.email) {
+      setRaiseDiag(null);
+      return;
+    }
+    let cancelled = false;
+    raiseApi.state(selectedStudent.email)
+      .then((diag) => { if (!cancelled) setRaiseDiag(diag); })
+      .catch(() => { if (!cancelled) setRaiseDiag(null); });
+    return () => { cancelled = true; };
+  }, [selectedStudentId]);
 
   const statusColors = { 
     Coding: 'bg-indigo-50 text-indigo-700 border border-indigo-100', 
@@ -614,6 +628,43 @@ export default function LiveMonitor() {
                 </div>
               </div>
             </div>
+
+            {raiseDiag && (
+              <div className="mb-4 rounded-xl border border-indigo-200 bg-indigo-50/60 p-4">
+                <div className="flex justify-between items-center mb-2">
+                  <p className="text-xs font-bold uppercase tracking-wider text-indigo-900">RAISE Adaptive Diagnostics</p>
+                  <span className={`px-2.5 py-0.5 rounded-full text-xs font-black ${
+                    raiseDiag.lastAction === 'FACULTY_ALERT' ? 'bg-rose-600 text-white'
+                    : raiseDiag.lastAction === 'SUPPORT_NOTIFY' ? 'bg-amber-500 text-white'
+                    : raiseDiag.lastAction === 'DELIVER_INTERVENTION' ? 'bg-indigo-600 text-white'
+                    : 'bg-emerald-100 text-emerald-800'
+                  }`}>
+                    {raiseDiag.lastAction || 'WAIT'}
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
+                  <div className="bg-white p-2.5 rounded-lg border border-indigo-100">
+                    <p className="text-[10px] text-slate-500 uppercase font-bold">Friction S_k</p>
+                    <p className="text-sm font-bold text-slate-800">{Number(raiseDiag.S_k || 0).toFixed(1)}</p>
+                  </div>
+                  <div className="bg-white p-2.5 rounded-lg border border-indigo-100">
+                    <p className="text-[10px] text-slate-500 uppercase font-bold">Momentum M_k</p>
+                    <p className="text-sm font-bold text-slate-800">{Number(raiseDiag.M_k || 0).toFixed(1)}</p>
+                  </div>
+                  <div className="bg-white p-2.5 rounded-lg border border-indigo-100">
+                    <p className="text-[10px] text-slate-500 uppercase font-bold">HDI</p>
+                    <p className="text-sm font-bold text-slate-800">{Number(raiseDiag.HDI || 0).toFixed(2)}</p>
+                  </div>
+                  <div className="bg-white p-2.5 rounded-lg border border-indigo-100">
+                    <p className="text-[10px] text-slate-500 uppercase font-bold">P_sr</p>
+                    <p className="text-sm font-bold text-slate-800">{Number(raiseDiag.P_sr || 0).toFixed(2)}</p>
+                  </div>
+                </div>
+                <p className="mt-2 text-[11px] text-indigo-800">
+                  {raiseDiag.stuck ? 'Stagnation detected • ' : ''}{raiseDiag.lastReason || 'No decision yet.'} • Hints: {raiseDiag.hintRequests || 0}
+                </p>
+              </div>
+            )}
 
             {/* Security & Activity Timeline */}
             <h4 className="font-bold text-xs uppercase tracking-wider text-slate-700 mb-2">Activity & Security Timeline</h4>

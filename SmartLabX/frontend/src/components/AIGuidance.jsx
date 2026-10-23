@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { raiseApi } from '../utils/api';
 
 export default function AIGuidance({ auth }) {
   const [question, setQuestion] = useState('');
@@ -45,7 +46,7 @@ export default function AIGuidance({ auth }) {
     return () => clearInterval(interval);
   }, []);
 
-  const handleAsk = (e) => {
+  const handleAsk = async (e) => {
     e.preventDefault();
     if (!question.trim()) return;
     
@@ -105,6 +106,22 @@ export default function AIGuidance({ auth }) {
         time: new Date().toLocaleTimeString(),
       };
       setLogs((prev) => [newLog, ...prev]);
+    }
+
+    if (auth?.email) {
+      try {
+        const hint = await raiseApi.hint({
+          studentId: auth.email,
+          question: question.trim().slice(0, 120),
+          currentProgress: 0,
+        });
+        if (hint?.content) {
+          const level = String(hint.level || '').toUpperCase();
+          setAnswer((prev) => `${prev}\n\n── RAISE Hint${level ? ` • Level ${level}` : ''} ──\n${hint.content}`);
+        }
+      } catch (err) {
+        // RAISE backend is optional; keep the local guidance answer.
+      }
     }
   };
 

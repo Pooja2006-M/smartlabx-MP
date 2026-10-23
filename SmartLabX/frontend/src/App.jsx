@@ -18,6 +18,7 @@ const VivaPortal         = lazy(() => import('./pages/VivaPortal.jsx'));
 
 // ── Protected Route Helper ───────────────────────────────────────────────────
 function ProtectedRoute({ children }) {
+  
   const token = localStorage.getItem('token');
   const userStr = localStorage.getItem('user') || localStorage.getItem('smartlabx-auth');
 

@@ -8,7 +8,7 @@ const VIVA_QUESTIONS = [
   { text: "Describe Belady's Anomaly in page replacement.", keywords: ["page fault", "frames", "fifo", "increase"], weight: 20 }
 ];
 
-export default function OSVivaPanel({ experimentId, darkMode, onBack, onComplete }) {
+export default function OSVivaPanel({ experimentId, darkMode, onBack, onComplete, student }) {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [currentQIndex, setCurrentQIndex] = useState(0);
@@ -17,19 +17,40 @@ export default function OSVivaPanel({ experimentId, darkMode, onBack, onComplete
   const [isListening, setIsListening] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [isTyping, setIsTyping] = useState(false);
-  const [isAccessAllowed, setIsAccessAllowed] = useState(true);
-  const [lockMessage, setLockMessage] = useState('');
+  const [isAccessAllowed, setIsAccessAllowed] = useState(false);
+  const [lockMessage, setLockMessage] = useState('Checking viva access...');
   const messagesEndRef = useRef(null);
   const recognitionRef = useRef(null);
   const videoRef = useRef(null);
 
-  // Check Staff Access Window
-  useEffect(() => {
+  const currentEmail = (() => {
+    if (student?.email) return String(student.email).trim().toLowerCase();
     try {
-      const configRaw = localStorage.getItem('smartlabx-viva-config');
-      if (configRaw) {
-        const config = JSON.parse(configRaw);
-        const studentConfig = config['student@smartlabx.edu'] || Object.values(config)[0];
+      const raw = sessionStorage.getItem('smartlabx-user') || localStorage.getItem('user') || localStorage.getItem('smartlabx-auth');
+      const parsed = raw ? JSON.parse(raw) : null;
+      if (parsed?.email) return String(parsed.email).trim().toLowerCase();
+    } catch (e) { console.error(e); }
+    return 'student@smartlabx.edu';
+  })();
+
+  // Check Staff Access Window (locked by default until faculty enables it)
+  useEffect(() => {
+    const resolveEntry = (config, email) => {
+      const target = String(email || '').trim().toLowerCase();
+      const normalized = {};
+      Object.keys(config || {}).forEach((key) => {
+        normalized[String(key).trim().toLowerCase()] = config[key];
+      });
+      if (normalized[target]) return normalized[target];
+      const isDemoAccount = /@student\.com$/i.test(target);
+      return isDemoAccount ? normalized['student@smartlabx.edu'] || null : null;
+    };
+
+    const checkAccess = () => {
+      try {
+        const configRaw = localStorage.getItem('smartlabx-viva-config');
+        const config = configRaw ? JSON.parse(configRaw) : {};
+        const studentConfig = resolveEntry(config, currentEmail);
         if (!studentConfig || !studentConfig.enabled) {
           setIsAccessAllowed(false);
           setLockMessage('[LOCK] Viva Session Locked: Faculty has not enabled your Viva access yet.');
@@ -40,9 +61,18 @@ export default function OSVivaPanel({ experimentId, darkMode, onBack, onComplete
           setLockMessage('⏰ Viva Access Expired: Allocated time window has passed. Contact your faculty.');
           return;
         }
+        setIsAccessAllowed(true);
+      } catch (e) {
+        console.error(e);
+        setIsAccessAllowed(false);
+        setLockMessage('[LOCK] Unable to verify viva access. Please contact your faculty.');
       }
-    } catch (e) { console.error(e); }
-  }, []);
+    };
+
+    checkAccess();
+    const poll = setInterval(checkAccess, 3000);
+    return () => clearInterval(poll);
+  }, [currentEmail]);
 
   // Speech Recognition
   useEffect(() => {
@@ -66,13 +96,13 @@ export default function OSVivaPanel({ experimentId, darkMode, onBack, onComplete
   // Camera
   useEffect(() => {
     let stream;
-    if (!isCompleted) {
+    if (!isCompleted && isAccessAllowed) {
       navigator.mediaDevices.getUserMedia({ video: true, audio: false })
         .then(s => { stream = s; if (videoRef.current) videoRef.current.srcObject = stream; })
         .catch(() => {});
     }
     return () => { if (stream) stream.getTracks().forEach(t => t.stop()); };
-  }, [isCompleted]);
+  }, [isCompleted, isAccessAllowed]);
 
   const speakText = (text) => {
     if ('speechSynthesis' in window) {
@@ -100,11 +130,13 @@ export default function OSVivaPanel({ experimentId, darkMode, onBack, onComplete
   };
 
   useEffect(() => {
+    if (!isAccessAllowed) return;
     const welcome = 'Welcome! I\'m your AI Viva Examiner for Operating Systems. Answer via voice ️ or keyboard ⌨️. Let\'s begin.';
     addAIMessage(welcome, 1200);
     speakText(welcome);
-    setTimeout(() => askQuestion(0), 3500);
-  }, []);
+    const timer = setTimeout(() => askQuestion(0), 3500);
+    return () => clearTimeout(timer);
+  }, [isAccessAllowed]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -152,11 +184,11 @@ export default function OSVivaPanel({ experimentId, darkMode, onBack, onComplete
     if (isCompleted) {
       try {
         const results = JSON.parse(localStorage.getItem('smartlabx-viva-results') || '{}');
-        results['student@smartlabx.edu'] = { studentName: 'Student', score: totalScore, maxScore: 100, grade, completedAt: new Date().toLocaleTimeString() + ' ' + new Date().toLocaleDateString() };
+        results[currentEmail] = { studentName: student?.name || 'Student', score: totalScore, maxScore: 100, grade, completedAt: new Date().toLocaleTimeString() + ' ' + new Date().toLocaleDateString() };
         localStorage.setItem('smartlabx-viva-results', JSON.stringify(results));
       } catch (e) {}
     }
-  }, [isCompleted, totalScore, grade]);
+  }, [isCompleted, totalScore, grade, currentEmail, student]);
 
   if (!isAccessAllowed) {
     return (

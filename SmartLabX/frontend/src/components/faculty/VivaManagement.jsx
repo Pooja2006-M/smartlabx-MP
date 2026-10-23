@@ -42,8 +42,7 @@ export default function VivaManagement() {
 
   const pendingVivas = [
     { id: 1, name: 'Aarav Kumar', rollNo: 'STU-2048', experiment: 'SQL DDL', subject: 'DBMS', status: 'Pending', submissionScore: '22/25', email: 'student@smartlabx.edu' },
-    { id: 2, name: 'Priya Sharma', rollNo: 'STU-2049', experiment: 'Computer Networks Exp 2', subject: 'CN', status: 'Scheduled', submissionScore: '24/25', email: 'priya@student.com' },
-    { id: 3, name: 'Arjun', rollNo: 'STU-2050', experiment: 'CPU Scheduling Algorithms', subject: 'OS', status: 'Completed', submissionScore: '20/25', email: 'arjun@student.com' },
+    { id: 2, name: 'Priya Sharma', rollNo: 'STU-2049', experiment: 'Computer Networks Exp 2', subject: 'CN', status: 'Scheduled', submissionScore: '24/25', email: 'priya@smartlabx.edu' },
   ];
 
   const handleToggleEnableViva = (studentEmail) => {

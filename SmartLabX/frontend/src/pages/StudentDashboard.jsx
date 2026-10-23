@@ -93,6 +93,7 @@ export default function StudentDashboard() {
   const [activeAnnouncement, setActiveAnnouncement] = useState(null);
   const [isWorkspaceLocked, setIsWorkspaceLocked] = useState(false);
   const [lockReason, setLockReason] = useState('');
+  const [vivaAccess, setVivaAccess] = useState(null);
 
   const storedUser = getTabUser() || {};
   const studentName = storedUser?.name || 'Aarav Kumar';
@@ -100,6 +101,25 @@ export default function StudentDashboard() {
   const studentId = storedUser?.studentId || 'STU-2048';
   const batch = storedUser?.batch || 'Batch 43';
   const initials = studentName.split(' ').map((n) => n[0]).join('').slice(0, 2).toUpperCase();
+
+  useEffect(() => {
+    const readVivaConfig = () => {
+      try {
+        const raw = localStorage.getItem('smartlabx-viva-config');
+        if (!raw) return null;
+        const entry = JSON.parse(raw)?.[studentEmail];
+        if (!entry || !entry.enabled) return null;
+        if (entry.expiryTimestamp && Date.now() > entry.expiryTimestamp) return null;
+        return entry;
+      } catch {
+        return null;
+      }
+    };
+
+    setVivaAccess(readVivaConfig());
+    const timer = setInterval(() => setVivaAccess(readVivaConfig()), 3000);
+    return () => clearInterval(timer);
+  }, [studentEmail]);
 
   useEffect(() => {
     if (!storedUser || storedUser.role !== 'student') {
@@ -626,6 +646,20 @@ export default function StudentDashboard() {
 
       /* ── VIVA ── */
       case 'viva':
+        if (!vivaAccess) {
+          return (
+            <div style={{ padding: '32px' }}>
+              <div style={{ background: 'white', borderRadius: '16px', padding: '56px 28px', border: '1px solid #f1f5f9', boxShadow: '0 2px 12px rgba(0,0,0,0.04)', textAlign: 'center' }}>
+                <h3 style={{ fontSize: '18px', fontWeight: '700', color: '#1e293b', marginBottom: '8px' }}>Viva Access Locked</h3>
+                <p style={{ fontSize: '13px', color: '#64748b', marginBottom: '4px' }}>Your faculty must enable viva access before you can begin.</p>
+                <p style={{ fontSize: '13px', color: '#94a3b8' }}>
+                  Student: <span style={{ fontWeight: 700, color: '#475569' }}>{studentEmail}</span>
+                </p>
+              </div>
+            </div>
+          );
+        }
+
         return (
           <div style={{ padding: '32px' }}>
             <div style={{ background: 'white', borderRadius: '16px', padding: '28px', border: '1px solid #f1f5f9', boxShadow: '0 2px 12px rgba(0,0,0,0.04)' }}>

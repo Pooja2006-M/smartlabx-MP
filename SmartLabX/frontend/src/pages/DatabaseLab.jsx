@@ -1,8 +1,9 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import AIGuidance from '../components/AIGuidance';
 import StaffMonitorWidgets from '../components/StaffMonitorWidgets';
 import { Link, useNavigate } from 'react-router-dom';
 import { getTabUser, trackStudentActivity, subscribeToStaffWarnings, logSecurityEvent, raiseStudentHand, subscribeToWorkspaceLock, subscribeToAnnouncements, logStudentCodeEdit, logStudentRunAttempt } from '../utils/liveTracker';
+import { raiseApi } from '../utils/api';
 import AIAnalysisModal from '../components/AIAnalysisModal';
 
 const staffAccount = {
@@ -173,6 +174,8 @@ export default function DatabaseLab() {
   const [results, setResults] = useState([]);
   const [queryLoading, setQueryLoading] = useState(false);
   const [message, setMessage] = useState('');
+  const [raiseNotice, setRaiseNotice] = useState(null);
+  const lastRaiseHintRef = useRef(null);
   const [studentName, setStudentName] = useState('');
   const [studentEmail, setStudentEmail] = useState('');
   const [showCreateStudent, setShowCreateStudent] = useState(false);
@@ -887,6 +890,56 @@ export default function DatabaseLab() {
             studentName: auth.name
           });
         } catch {}
+
+        // Feed the run event into RAISE and surface its adaptive decision
+        try {
+          const rawFriction = querySuccess ? 12 : 58;
+          const progress = querySuccess ? 65 : 20;
+          const out = await raiseApi.attempt({
+            studentId: auth.email,
+            rawFriction,
+            hintRequests: 0,
+            success: querySuccess,
+            progress,
+          });
+
+          if (out?.action === 'DELIVER_INTERVENTION') {
+            const hint = await raiseApi.hint({
+              studentId: auth.email,
+              question: query.trim().slice(0, 120),
+              currentProgress: progress,
+            });
+            lastRaiseHintRef.current = hint?.id ?? null;
+            setRaiseNotice({
+              type: 'hint',
+              level: hint?.level,
+              content: hint?.content,
+              reason: out.reason,
+              P_sr: out.P_sr,
+              HDI: out.HDI,
+            });
+          } else if (out?.action === 'SUPPORT_NOTIFY') {
+            lastRaiseHintRef.current = null;
+            setRaiseNotice({ type: 'support', content: out.reason, P_sr: out.P_sr, HDI: out.HDI });
+          } else if (out?.action === 'FACULTY_ALERT') {
+            lastRaiseHintRef.current = null;
+            setRaiseNotice({ type: 'alert', content: out.reason, P_sr: out.P_sr, HDI: out.HDI });
+          } else {
+            if (querySuccess) {
+              await raiseApi.verify({
+                studentId: auth.email,
+                hintId: lastRaiseHintRef.current,
+                recovered: true,
+                afterProgress: progress,
+                independent: !lastRaiseHintRef.current,
+              });
+              lastRaiseHintRef.current = null;
+            }
+            setRaiseNotice(null);
+          }
+        } catch (raiseErr) {
+          // RAISE backend is optional; never block the query console.
+        }
       }
     }
   };
@@ -1202,6 +1255,26 @@ export default function DatabaseLab() {
                         </div>
                         <span className="text-xs text-slate-500 font-mono">SQL Standard: SQLite / ANSI</span>
                       </div>
+                      {raiseNotice && (
+                        <div className={`mt-3 rounded-2xl border p-3 text-sm ${
+                          raiseNotice.type === 'hint' ? 'border-emerald-200 bg-emerald-50 text-emerald-900'
+                          : raiseNotice.type === 'support' ? 'border-amber-200 bg-amber-50 text-amber-900'
+                          : raiseNotice.type === 'alert' ? 'border-rose-200 bg-rose-50 text-rose-900'
+                          : 'border-slate-200 bg-slate-50 text-slate-800'
+                        }`}>
+                          {raiseNotice.type === 'hint' ? (
+                            <>
+                              <p className="font-bold">RAISE Hint ({String(raiseNotice.level || '').toUpperCase()})</p>
+                              <p className="mt-1">{raiseNotice.content}</p>
+                            </>
+                          ) : (
+                            <p className="font-semibold">{raiseNotice.content}</p>
+                          )}
+                          <p className="mt-1 text-[11px] opacity-70">
+                            P_sr: {typeof raiseNotice.P_sr === 'number' ? raiseNotice.P_sr.toFixed(2) : '-'} • HDI: {typeof raiseNotice.HDI === 'number' ? raiseNotice.HDI.toFixed(2) : '-'}
+                          </p>
+                        </div>
+                      )}
                     </div>
 
                     <div className="space-y-2">

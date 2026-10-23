@@ -7,6 +7,16 @@ const POLL_MS             = 350;   // send frame every 350ms (~3 FPS)
 const DISCONNECT_MS       = 6000;  // 6s no response → show disconnected
 const CAMERA_UNAVAILABLE_MESSAGE = 'Camera access is unavailable. Open the exam in a supported browser over HTTPS or localhost.';
 
+function cameraErrorMessage(err) {
+  if (err?.name === 'NotAllowedError') {
+    return 'Allow camera access in your browser to enable live exam monitoring.';
+  }
+  if (err?.name === 'NotFoundError') {
+    return 'No camera was found. Connect a camera to enable live exam monitoring.';
+  }
+  return 'Camera could not start. Check that it is connected and not being used by another app.';
+}
+
 export default function useProctoring({ studentId = 'STU_DEMO', enabled = true, onAlert = () => {} }) {
   const [isStreaming, setIsStreaming]     = useState(false);
   const [cameraError, setCameraError]     = useState(() => (
@@ -28,11 +38,23 @@ export default function useProctoring({ studentId = 'STU_DEMO', enabled = true, 
     anomaly_score: 0, risk_level: 'LOW', server_status: 'ONLINE',
   });
 
+  // Offscreen capture element — ALWAYS alive, independent of what the UI renders.
+  // This guarantees frames keep flowing even if the visible <video> unmounts
+  // (e.g. the HUD is minimised) or the stream is swapped.
+  const [captureVideo] = useState(() => {
+    const v = document.createElement('video');
+    v.muted = true;
+    v.playsInline = true;
+    v.autoplay = true;
+    return v;
+  });
+
   // Refs — never trigger re-renders or effect restarts
-  const videoRef        = useRef(null);
+  const videoRef        = useRef(null);   // visible display element (HUD)
   const canvasRef       = useRef(document.createElement('canvas'));
   const streamRef       = useRef(null);
   const timerRef        = useRef(null);
+  const watchdogRef     = useRef(null);
   const busyRef         = useRef(false);
   const lastOkRef       = useRef(0);
   const sidRef          = useRef(studentId);
@@ -42,45 +64,13 @@ export default function useProctoring({ studentId = 'STU_DEMO', enabled = true, 
   useEffect(() => { sidRef.current = studentId; }, [studentId]);
   useEffect(() => { onAlertRef.current = onAlert; }, [onAlert]);
 
-  // ── Attach stream to video element (called right after getUserMedia) ─────
-  const attachStream = useCallback((stream) => {
-    streamRef.current = stream;
-
-    const attach = (vid) => {
-      vid.srcObject = stream;
-      // autoPlay attribute handles play, but call play() as belt-and-suspenders
-      const p = vid.play();
-      if (p && p.catch) p.catch(() => {});
-      setIsStreaming(true);
-      console.log('[Proctor] ✅ Camera ON:', stream.getVideoTracks()[0]?.label);
-    };
-
-    if (videoRef.current) {
-      attach(videoRef.current);
-    } else {
-      // Video element not mounted yet — poll until it is
-      let attempts = 0;
-      const poll = setInterval(() => {
-        attempts++;
-        if (videoRef.current) {
-          attach(videoRef.current);
-          clearInterval(poll);
-        } else if (attempts > 25) {
-          clearInterval(poll); // give up after ~5s
-          console.warn('[Proctor] video element never mounted.');
-        }
-      }, 200);
-    }
-  }, []);
-
   // ── Frame sender — sends camera frame to FastAPI ─────────────────────────
   const sendFrame = useCallback(async () => {
     if (busyRef.current) return; // skip if previous request still in flight
 
-    const vid = videoRef.current;
+    const vid = captureVideo;
     // Only need readyState >= 1 (HAVE_METADATA) for a live camera stream
-    // Do NOT check vid.paused — a camera stream can briefly appear paused
-    if (!vid || vid.readyState < 1 || !streamRef.current) return;
+    if (!vid || vid.readyState < 1) return;
 
     busyRef.current = true;
     try {
@@ -136,44 +126,88 @@ export default function useProctoring({ studentId = 'STU_DEMO', enabled = true, 
     } finally {
       busyRef.current = false;
     }
-  }, []); // empty deps — stable forever
+  }, [captureVideo]); // stable
 
   // ── Main effect — runs once on mount ─────────────────────────────────────
   useEffect(() => {
     if (!enabled) return;
     let alive = true;
 
-    // 1. Get camera
-    if (navigator.mediaDevices?.getUserMedia) {
+    const attach = (stream) => {
+      streamRef.current = stream;
+
+      // Offscreen capture element (always kept alive)
+      captureVideo.srcObject = stream;
+      const cp = captureVideo.play();
+      if (cp && cp.catch) cp.catch(() => {});
+
+      // Visible display element (may remount when HUD expands/collapses)
+      const attachDisplay = (vid) => {
+        vid.srcObject = stream;
+        const p = vid.play();
+        if (p && p.catch) p.catch(() => {});
+      };
+      if (videoRef.current) {
+        attachDisplay(videoRef.current);
+      } else {
+        let attempts = 0;
+        const poll = setInterval(() => {
+          attempts++;
+          if (videoRef.current) {
+            attachDisplay(videoRef.current);
+            clearInterval(poll);
+          } else if (attempts > 25) {
+            clearInterval(poll);
+          }
+        }, 200);
+      }
+
+      setIsStreaming(true);
+      setCameraError('');
+    };
+
+    const getCamera = () => {
+      if (!navigator.mediaDevices?.getUserMedia) return;
       navigator.mediaDevices
         .getUserMedia({ video: { width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 20 } }, audio: false })
-        .then((stream) => { if (alive) attachStream(stream); else stream.getTracks().forEach(t => t.stop()); })
+        .then((stream) => {
+          if (!alive) { stream.getTracks().forEach(t => t.stop()); return; }
+          attach(stream);
+          // If a device disconnects / stream ends, auto-recover
+          stream.getVideoTracks().forEach((track) => {
+            track.onended = () => { if (alive) setTimeout(getCamera, 800); };
+          });
+        })
         .catch((err) => {
           console.error('[Proctor] ❌ Camera error:', err.name, err.message);
-          if (alive) {
-            const message = err.name === 'NotAllowedError'
-              ? 'Allow camera access in your browser to enable live exam monitoring.'
-              : err.name === 'NotFoundError'
-                ? 'No camera was found. Connect a camera to enable live exam monitoring.'
-                : 'Camera could not start. Check that it is connected and not being used by another app.';
-            setCameraError(message);
-          }
+          if (alive) setCameraError(cameraErrorMessage(err));
         });
-    }
+    };
 
-    // 2. Poll frames
+    getCamera();
+
+    // Poll frames
     timerRef.current = setInterval(sendFrame, POLL_MS);
+
+    // Watchdog — re-acquire the camera if the stream dies for any reason
+    watchdogRef.current = setInterval(() => {
+      const st = streamRef.current;
+      const hasLive = st && st.getVideoTracks().some((t) => t.readyState === 'live');
+      if (!hasLive) getCamera();
+    }, 3000);
 
     return () => {
       alive = false;
       clearInterval(timerRef.current);
+      clearInterval(watchdogRef.current);
       streamRef.current?.getTracks().forEach(t => t.stop());
       streamRef.current = null;
+      captureVideo.srcObject = null;
       setIsStreaming(false);
       setCameraError('');
       setIsConnected(false);
     };
-  }, [enabled, studentId, attachStream, sendFrame]); // eslint-disable-line
+  }, [enabled, studentId, captureVideo, sendFrame]);
 
   return { videoRef, isStreaming, cameraError, isConnected, telemetry, anomalies, warningCount };
 }

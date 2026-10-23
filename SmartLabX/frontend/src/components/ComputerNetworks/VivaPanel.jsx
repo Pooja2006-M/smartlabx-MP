@@ -41,20 +41,31 @@ export default function VivaPanel({ student, onClose }) {
   const [isListening, setIsListening] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [isTyping, setIsTyping] = useState(false);
-  const [isAccessAllowed, setIsAccessAllowed] = useState(true);
-  const [lockMessage, setLockMessage] = useState('');
+  const [isAccessAllowed, setIsAccessAllowed] = useState(false);
+  const [lockMessage, setLockMessage] = useState('Checking viva access...');
   const messagesEndRef = useRef(null);
   const recognitionRef = useRef(null);
   const vivaQuestionsRef = useRef(QUESTIONS);
 
-  // Check Staff Access Window & Questions
+  // Check Staff Access Window & Questions (locked by default until faculty enables it)
   useEffect(() => {
-    try {
-      const configRaw = localStorage.getItem('smartlabx-viva-config');
-      if (configRaw) {
-        const config = JSON.parse(configRaw);
-        const studentConfig = config[student.email] || config['student@smartlabx.edu'];
-        
+    const resolveEntry = (config, email) => {
+      const target = String(email || '').trim().toLowerCase();
+      const normalized = {};
+      Object.keys(config || {}).forEach((key) => {
+        normalized[String(key).trim().toLowerCase()] = config[key];
+      });
+      if (normalized[target]) return normalized[target];
+      const isDemoAccount = /@student\.com$/i.test(target);
+      return isDemoAccount ? normalized['student@smartlabx.edu'] || null : null;
+    };
+
+    const checkAccess = () => {
+      try {
+        const configRaw = localStorage.getItem('smartlabx-viva-config');
+        const config = configRaw ? JSON.parse(configRaw) : {};
+        const studentConfig = resolveEntry(config, student?.email);
+
         if (!studentConfig || !studentConfig.enabled) {
           setIsAccessAllowed(false);
           setLockMessage('[LOCK] Viva Session Locked: Faculty has not enabled your Viva access yet.');
@@ -76,10 +87,18 @@ export default function VivaPanel({ student, onClose }) {
             feedback: "Answer evaluated based on concept coverage."
           }));
         }
+
+        setIsAccessAllowed(true);
+      } catch (e) {
+        console.error(e);
+        setIsAccessAllowed(false);
+        setLockMessage('[LOCK] Unable to verify viva access. Please contact your faculty.');
       }
-    } catch (e) {
-      console.error(e);
-    }
+    };
+
+    checkAccess();
+    const poll = setInterval(checkAccess, 3000);
+    return () => clearInterval(poll);
   }, [student]);
 
   // Initialize Speech Recognition
@@ -143,11 +162,13 @@ export default function VivaPanel({ student, onClose }) {
   };
 
   useEffect(() => {
+    if (!isAccessAllowed) return;
     const welcome = `Welcome, ${student.name}! I'm your AI Viva Examiner. Answer via voice ️ or keyboard ⌨️. Let's begin your examination.`;
     addAIMessage(welcome, 1200);
     speakText(welcome);
-    setTimeout(() => askQuestion(0), 3500);
-  }, []);
+    const timer = setTimeout(() => askQuestion(0), 3500);
+    return () => clearTimeout(timer);
+  }, [isAccessAllowed]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });

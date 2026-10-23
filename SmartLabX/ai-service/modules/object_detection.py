@@ -6,20 +6,25 @@ Loaded via the `ultralytics` package and the model weights bundled with
 the AI service.
 """
 import os
+import threading
 
 from modules import config
 
 _model = None
+_model_lock = threading.Lock()
+_infer_lock = threading.Lock()
 
 
 def _get_model():
     global _model
     if _model is None:
-        from ultralytics import YOLO
-        weights_path = os.path.join(config.BASE_DIR, "yolov5su.pt")
-        if not os.path.isfile(weights_path):
-            raise FileNotFoundError(f"YOLO weights not found: {weights_path}")
-        _model = YOLO(weights_path)
+        with _model_lock:
+            if _model is None:
+                from ultralytics import YOLO
+                weights_path = os.path.join(config.BASE_DIR, "yolov5su.pt")
+                if not os.path.isfile(weights_path):
+                    raise FileNotFoundError(f"YOLO weights not found: {weights_path}")
+                _model = YOLO(weights_path)
     return _model
 
 
@@ -38,13 +43,14 @@ def detect_objects(frame_bgr):
     """
     try:
         model = _get_model()
-        results = model.predict(
-            frame_bgr,
-            conf=min(config.YOLO_CONF_THRESHOLD, config.YOLO_PERSON_CONF_THRESHOLD,
-                     config.YOLO_PHONE_CONF_THRESHOLD),
-            verbose=False,
-            imgsz=getattr(config, "YOLO_IMGSZ", 640),
-        )[0]
+        with _infer_lock:
+            results = model.predict(
+                frame_bgr,
+                conf=min(config.YOLO_CONF_THRESHOLD, config.YOLO_PERSON_CONF_THRESHOLD,
+                         config.YOLO_PHONE_CONF_THRESHOLD),
+                verbose=False,
+                imgsz=getattr(config, "YOLO_IMGSZ", 640),
+            )[0]
 
         persons = 0
         phone_detected = False

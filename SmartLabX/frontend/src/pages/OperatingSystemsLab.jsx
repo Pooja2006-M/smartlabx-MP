@@ -634,6 +634,7 @@ export default function OperatingSystemsLab() {
             <OSVivaPanel
               experimentId={null}
               darkMode={false}
+              student={activeVivaStudent}
               onBack={() => setActiveVivaStudent(null)}
             />
           </div>
